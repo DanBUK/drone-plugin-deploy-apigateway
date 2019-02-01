@@ -1,0 +1,48 @@
+#!/bin/bash -e
+
+if [ -z "${PLUGIN_ROLE}" ]; then
+  echo "Error: Please provide role to use.";
+  exit 1;
+fi;
+
+if [ -z "${PLUGIN_REGION}" ]; then
+  echo "Error: Please provide the region of the API GW to deploy.";
+  exit 2;
+fi;
+
+if [ -z "${PLUGIN_STAGE}" ]; then
+  echo "Error: Please provide the stage of the API GW to deploy.";
+  exit 3;
+fi;
+
+if [ -z "${PLUGIN_STATE_REGION}" ]; then
+  echo "Error: Please provide state file region.";
+  exit 4;
+fi;
+
+if [ -z "${PLUGIN_STATE_FILE}" ]; then
+  echo "Error: Please provide state file to query for rest ID.";
+  exit 5;
+fi;
+
+if [ -z "${PLUGIN_QUERY}" ]; then
+  echo "Error: Please provide query to access rest ID from state file."
+  exit 6;
+fi;
+
+TMP_CREDS="/tmp/creds.json";
+
+echo "Assuming: ${PLUGIN_ROLE}";
+aws sts assume-role --role-arn ${PLUGIN_ROLE} --role-session-name=${DRONE_REPO_OWNER}-${DRONE_REPO_NAME} > ${TMP_CREDS};
+export AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' ${TMP_CREDS});
+export AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' ${TMP_CREDS});
+export AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' ${TMP_CREDS});
+rm -f ${TMP_CREDS};
+
+
+TMP_STATE="/tmp/state.tfjson";
+aws s3 cp --region=${PLUGIN_STATE_REGION} ${PLUGIN_STATE_FILE} ${TMP_STATE};
+export REST_ID=$(jq -r "${PLUGIN_QUERY}" ${TMP_STATE});
+rm -f ${TMP_STATE};
+export DEPLOYMENT_ID=$( aws apigateway create-deployment --region ${PLUGIN_REGION} --rest-api-id ${REST_ID} --stage-name ${PLUGIN_STAGE} | jq -r .id );
+aws apigateway update-stage --region ${PLUGIN_REGION} --rest-api-id ${REST_ID} --stage-name ${PLUGIN_STAGE} --patch-operations "op='replace',path='/deploymentId',value='${DEPLOYMENT_ID}'" | jq -r .variables;
